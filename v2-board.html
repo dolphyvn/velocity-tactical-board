@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Velocity Board v2</title>
+<style>
+:root{--bg:#0f172a;--panel:#111827;--card:#1f2937;--border:#374151;--text:#f8fafc;--muted:#cbd5e1;--red:#dc2626;--blue:#2563eb;--yellow:#facc15}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",sans-serif}.app{max-width:1800px;margin:auto;padding:8px}.top,.toolbar{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;background:var(--panel);border:1px solid var(--border);border-radius:9px;padding:8px;margin-bottom:7px}.toolbar{justify-content:flex-start}
+button,input{font:inherit}button{background:var(--card);color:white;border:1px solid var(--border);border-radius:7px;padding:7px 10px;cursor:pointer}.main{display:grid;grid-template-columns:190px minmax(0,1fr) 350px;gap:8px}.side,.ai{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:9px}.pitch{position:relative;background:#1f2937;border:1px solid var(--border);border-radius:10px;overflow:hidden}#board{width:100%;height:auto;display:block;touch-action:none}.source{padding:8px;background:var(--card);border:1px solid var(--border);border-radius:8px;margin:6px 0;cursor:grab}.red{border-left:6px solid var(--red)}.blue{border-left:6px solid var(--blue)}.editor{display:grid;grid-template-columns:1fr 1fr 2fr auto auto;gap:6px;margin-top:7px}.editor input{background:var(--card);color:white;border:1px solid var(--border);border-radius:7px;padding:7px}.hidden{display:none!important}.viewer .top,.viewer .toolbar,.viewer .side,.viewer .ai,.viewer .editor{display:none!important}.viewer .app{max-width:none;padding:0}.viewer .main{display:block}.viewer .pitch{border:0;border-radius:0;width:100vw;height:100vh;display:flex;align-items:center;justify-content:center}.viewer #board{width:100vw;height:100vh}.summary,.rec{background:var(--card);padding:8px;border-radius:7px;margin:6px 0}.muted{color:var(--muted);font-size:12px}@media(max-width:1100px){.main{grid-template-columns:160px 1fr}.ai{grid-column:1/-1}.editor{grid-template-columns:1fr 1fr}}@media(max-width:700px){.main{grid-template-columns:1fr}.side{order:1}.pitch{order:2}.ai{order:3}}
+</style></head>
+<body><main class="app">
+<div class="top"><b id="title">Board</b><span id="status" class="muted">Loading…</span><span id="modeLabel" class="muted">COACH MODE</span><a href="/v2.html" style="color:white">Dashboard</a></div>
+<div class="toolbar"><button id="hBtn">Horizontal</button><button id="vBtn">Vertical</button><button id="analyseBtn">🤖 Analyse</button><button id="applyBtn" disabled>Apply AI moves</button></div>
+<div class="main">
+ <aside class="side"><h3>Squad</h3><div id="squad"></div><hr><div class="source red" data-team="A">+ Temporary red</div><div class="source blue" data-team="B">+ Temporary blue</div></aside>
+ <section><div class="pitch"><svg id="board" viewBox="0 0 1200 700"><g id="pitchLayer"></g><g id="ghostLayer"></g><g id="piecesLayer"></g></svg></div>
+ <div id="editor" class="editor hidden"><input id="name" placeholder="Name"><input id="role" placeholder="Role"><input id="specs" placeholder="Specs / notes"><button id="save">Update</button><button id="del">Delete</button></div></section>
+ <aside class="ai"><h3>AI Tactical Coach</h3><div id="aiResult" class="muted">Arrange the board, then analyse.</div></aside>
+</div></main>
+<script>
+const H={"Content-Type":"application/json","X-VLFC-Request":"v2"},q=new URLSearchParams(location.search),boardId=q.get("board"),share=q.get("share"),viewer=!!share;
+if(viewer)document.body.classList.add("viewer");
+const $=id=>document.getElementById(id),NS="http://www.w3.org/2000/svg",svg=$("board"),pitch=$("pitchLayer"),pieces=$("piecesLayer"),ghosts=$("ghostLayer");
+let orientation="horizontal",stateVersion=0,teamId=null,selected=null,dragging=null,pointerId=null,lastAnalysis=null,sendTimer=null;const ps=new Map();const ball={id:"ball",type:"ball",x:600,y:350,el:null};
+function S(t,a={}){const e=document.createElementNS(NS,t);for(const[k,v]of Object.entries(a))e.setAttribute(k,v);return e}
+async function api(path,opt={}){const r=await fetch(path,{credentials:"same-origin",...opt,headers:{...H,...(opt.headers||{})}});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||("HTTP "+r.status));return d}
+function draw(){
+ pitch.innerHTML="";
+
+ if(orientation==="horizontal"){
+  svg.setAttribute("viewBox","0 0 1200 700");
+
+  pitch.append(
+   S("rect",{x:10,y:10,width:1180,height:680,rx:18,fill:"#4b7f52"}),
+
+   S("rect",{x:25,y:25,width:1150,height:650,fill:"none",stroke:"white","stroke-width":4}),
+
+   S("line",{x1:600,y1:25,x2:600,y2:675,stroke:"white","stroke-width":4}),
+
+   S("circle",{cx:600,cy:350,r:85,fill:"none",stroke:"white","stroke-width":4}),
+
+   S("circle",{cx:600,cy:350,r:5,fill:"white"}),
+
+   /* Left penalty / goal area */
+   S("rect",{x:25,y:190,width:180,height:320,fill:"none",stroke:"white","stroke-width":4}),
+
+   /* Right penalty / goal area */
+   S("rect",{x:995,y:190,width:180,height:320,fill:"none",stroke:"white","stroke-width":4}),
+
+   /* Left goal */
+   S("rect",{x:5,y:270,width:20,height:160,fill:"none",stroke:"white","stroke-width":4}),
+
+   /* Right goal */
+   S("rect",{x:1175,y:270,width:20,height:160,fill:"none",stroke:"white","stroke-width":4})
+  );
+
+ }else{
+  svg.setAttribute("viewBox","0 0 700 1000");
+
+  pitch.append(
+   S("rect",{x:10,y:10,width:680,height:980,rx:18,fill:"#4b7f52"}),
+
+   S("rect",{x:25,y:25,width:650,height:950,fill:"none",stroke:"white","stroke-width":4}),
+
+   S("line",{x1:25,y1:500,x2:675,y2:500,stroke:"white","stroke-width":4}),
+
+   S("circle",{cx:350,cy:500,r:85,fill:"none",stroke:"white","stroke-width":4}),
+
+   S("circle",{cx:350,cy:500,r:5,fill:"white"}),
+
+   /* Top penalty / goal area */
+   S("rect",{x:180,y:25,width:340,height:150,fill:"none",stroke:"white","stroke-width":4}),
+
+   /* Bottom penalty / goal area */
+   S("rect",{x:180,y:825,width:340,height:150,fill:"none",stroke:"white","stroke-width":4}),
+
+   /* Top goal */
+   S("rect",{x:270,y:5,width:160,height:20,fill:"none",stroke:"white","stroke-width":4}),
+
+   /* Bottom goal */
+   S("rect",{x:270,y:975,width:160,height:20,fill:"none",stroke:"white","stroke-width":4})
+  );
+ }
+}
+function createBall(){const g=S("g");g.dataset.id="ball";g.append(S("circle",{r:22,fill:"#ff7a00",stroke:"#7c2d12","stroke-width":4}),S("circle",{r:6,fill:"white"}));pieces.append(g);ball.el=g;update(ball)}
+function nextId(team){let i=1;while(ps.has(team+i))i++;return team+i}
+function createPlayer(team,id,data={}){id=id||nextId(team);if(ps.has(id))return ps.get(id);const g=S("g");g.dataset.id=id;g.append(S("circle",{r:36,fill:team==="A"?"#dc2626":"#2563eb",stroke:"white","stroke-width":4}));const t=S("text",{"text-anchor":"middle",fill:"white","font-size":12,"font-weight":800,"pointer-events":"none"});g.append(t);pieces.append(g);const p={id,team,type:"player",x:data.x||600,y:data.y||350,name:data.name||id,role:data.role||"",specs:data.specs||"",team_player_id:data.team_player_id||null,el:g,text:t};ps.set(id,p);label(p);update(p);return p}
+function label(p){p.text.textContent=p.name||p.id;p.text.setAttribute("y","4")}
+function update(p){p.el.setAttribute("transform",`translate(${p.x} ${p.y})`)}
+function point(cx,cy){const p=svg.createSVGPoint();p.x=cx;p.y=cy;const z=p.matrixTransform(svg.getScreenCTM().inverse());return{x:z.x,y:z.y}}
+function clamp(p,x,y){const r=p.type==="ball"?22:36;if(orientation==="horizontal")return{x:Math.max(25+r,Math.min(1175-r,x)),y:Math.max(25+r,Math.min(675-r,y))};return{x:Math.max(25+r,Math.min(675-r,x)),y:Math.max(25+r,Math.min(975-r,y))}}
+function get(id){return id==="ball"?ball:ps.get(id)}
+svg.onpointerdown=e=>{if(viewer)return;const g=e.target.closest("[data-id]");if(!g)return;dragging=get(g.dataset.id);pointerId=e.pointerId;dragging.el.setPointerCapture(pointerId);if(dragging.type==="player")select(dragging.id)}
+svg.onpointermove=e=>{if(!dragging||e.pointerId!==pointerId)return;const q=point(e.clientX,e.clientY),z=clamp(dragging,q.x,q.y);dragging.x=z.x;dragging.y=z.y;update(dragging);queueSave()}
+svg.onpointerup=e=>{if(!dragging||e.pointerId!==pointerId)return;dragging=null;pointerId=null;saveState()}
+function select(id){
+ selected=id;
+ const p=ps.get(id);
+ if(!p)return;
+
+ $("editor").classList.remove("hidden");
+ $("name").value=p.name||p.id;
+ $("role").value=p.role||"";
+ $("specs").value=p.specs||"";
+}
+
+$("save").onclick=async()=>{
+ if(!selected)return;
+
+ const p=ps.get(selected);
+ if(!p)return;
+
+ p.name=$("name").value.trim()||p.id;
+ p.role=$("role").value.trim();
+ p.specs=$("specs").value.trim();
+
+ label(p);
+
+ try{
+  await saveState();
+  $("status").textContent="Player updated • state "+stateVersion;
+ }catch(e){
+  $("status").textContent="Player save failed: "+e.message;
+ }
+};
+
+$("del").onclick=async()=>{
+ const p=ps.get(selected);
+
+ if(p){
+  p.el.remove();
+  ps.delete(selected);
+ }
+
+ selected=null;
+ $("editor").classList.add("hidden");
+
+ try{
+  await saveState();
+ }catch(e){
+  $("status").textContent="Player delete failed: "+e.message;
+ }
+};
+function state(){const pos={ball:{x:ball.x,y:ball.y}},players={};ps.forEach((p,id)=>{pos[id]={x:p.x,y:p.y};players[id]={name:p.name,role:p.role,specs:p.specs,team_player_id:p.team_player_id}});return{orientation,positions:pos,players,context:{velocity_team:"A",possession:"velocity",phase:"Build-up",game_state:"Drawing",scenario:"General analysis"}}}
+function loadState(s){orientation=s.orientation||"horizontal";draw();const wanted=new Set(Object.keys(s.players||{}));[...ps.keys()].forEach(id=>{if(!wanted.has(id)){ps.get(id).el.remove();ps.delete(id)}});for(const[id,d]of Object.entries(s.players||{})){let p=ps.get(id)||createPlayer(id.startsWith("B")?"B":"A",id,d);Object.assign(p,d);const q=s.positions?.[id];if(q){p.x=Number(q.x);p.y=Number(q.y)}label(p);update(p)}const b=s.positions?.ball;if(b){ball.x=Number(b.x);ball.y=Number(b.y);update(ball)}stateVersion=s.version||0}
+function queueSave(){clearTimeout(sendTimer);sendTimer=setTimeout(saveState,100)}
+async function saveState(){
+ if(viewer)return null;
+
+ const payload=state();
+
+ const d=await api(`/api/v2/boards/${boardId}/state`,{
+  method:"PUT",
+  body:JSON.stringify(payload)
+ });
+
+ stateVersion=d.version;
+ $("status").textContent="Saved • state "+stateVersion;
+
+ return d;
+}
+async function poll(){try{const d=viewer?await api("/api/v2/share/"+share):await api("/api/v2/boards/"+boardId);title.textContent=d.name;teamId=d.team_id||teamId;if(!dragging)loadState(d.state);if(!viewer)$("status").textContent="Live • state "+stateVersion}catch(e){$("status").textContent=e.message}}
+function add(team,data={}){const p=createPlayer(team,null,data);p.x=orientation==="horizontal"?(team==="A"?430:770):350;p.y=orientation==="horizontal"?350:(team==="A"?650:350);update(p);saveState()}
+document.querySelectorAll(".source").forEach(x=>x.onclick=()=>!viewer&&add(x.dataset.team))
+hBtn.onclick=()=>{orientation="horizontal";draw();saveState()};vBtn.onclick=()=>{orientation="vertical";draw();saveState()}
+async function loadSquad(){if(viewer||!teamId)return;const d=await api(`/api/v2/teams/${teamId}/players`);squad.innerHTML=d.players.map(p=>`<div class="source red" data-p='${encodeURIComponent(JSON.stringify(p))}'>${esc(p.name)}<div class="muted">${esc(p.role)}</div></div>`).join("");squad.querySelectorAll("[data-p]").forEach(x=>x.onclick=()=>{const p=JSON.parse(decodeURIComponent(x.dataset.p));add("A",{name:p.name,role:p.role,specs:p.specs,team_player_id:p.id})})}
+analyseBtn.onclick=async()=>{try{aiResult.textContent="Analysing…";const d=await api(`/api/v2/boards/${boardId}/analyse`,{method:"POST",body:"{}"});lastAnalysis=d.analysis;renderAi(d.analysis);ghostAi(d.analysis.recommendations||[])}catch(e){aiResult.textContent=e.message}}
+function renderAi(a){aiResult.innerHTML=`<div class="summary"><b>${esc(a.summary||"Analysis")}</b></div>`+(a.recommendations||[]).map(r=>`<div class="rec"><b>${esc(ps.get(r.player_id)?.name||r.player_id)}</b>: ${esc(r.reason)}</div>`).join("");applyBtn.disabled=!(a.recommendations||[]).some(valid)}
+function valid(r){return ps.has(r.player_id)&&Number.isFinite(Number(r.suggested_x))&&Number.isFinite(Number(r.suggested_y))}
+function ghostAi(rs){ghosts.innerHTML="";rs.filter(valid).forEach(r=>{const g=S("g",{transform:`translate(${r.suggested_x} ${r.suggested_y})`});g.append(S("circle",{r:39,fill:"none",stroke:"#facc15","stroke-width":4,"stroke-dasharray":"8 6"}));ghosts.append(g)})}
+applyBtn.onclick=()=>{(lastAnalysis?.recommendations||[]).filter(valid).forEach(r=>{const p=ps.get(r.player_id),z=clamp(p,Number(r.suggested_x),Number(r.suggested_y));p.x=z.x;p.y=z.y;update(p)});ghosts.innerHTML="";applyBtn.disabled=true;saveState()}
+function esc(x){return String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
+(async()=>{
+  draw();
+  createBall();
+
+  if(!boardId && !share){
+    $("status").textContent="Missing board/share ID";
+    return;
+  }
+
+  // PUBLIC VIEWER MODE:
+  // share-token boards never require login.
+  if(viewer){
+    document.body.classList.add("viewer");
+    try{
+      await poll();
+      setInterval(poll,500);
+    }catch(e){
+      $("status").textContent=e.message;
+    }
+    return;
+  }
+
+  // COACH / EDIT MODE:
+  // verify session before attempting to load the private board.
+  try{
+    const me=await api("/api/v2/me");
+    if(!me.user){
+      location.href="/v2.html?next="+encodeURIComponent(location.pathname+location.search);
+      return;
+    }
+  }catch(e){
+    location.href="/v2.html?next="+encodeURIComponent(location.pathname+location.search);
+    return;
+  }
+
+  try{
+    await poll();
+    await loadSquad();
+    setInterval(poll,500);
+  }catch(e){
+    $("status").textContent=e.message;
+  }
+})()
+</script></body></html>
