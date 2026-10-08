@@ -91,6 +91,17 @@ def init_db():
           api_key_enc TEXT NOT NULL DEFAULT '',
           updated_at INTEGER NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS scenarios(
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          board_id INTEGER NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          share_token TEXT NOT NULL UNIQUE,
+          state_json TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
         """)
         c.execute("DELETE FROM sessions WHERE expires_at < ?", (now(),))
 
@@ -149,6 +160,8 @@ def default_board_state():
         "orientation": "horizontal",
         "positions": {"ball": {"x": 600, "y": 350}},
         "players": {},
+        "actions": [],
+        "frames": [],
         "context": {
             "velocity_team": "A",
             "possession": "velocity",
@@ -192,6 +205,74 @@ def clean_board_state(data, current_version=0):
             "specs": str(info.get("specs", "")).strip()[:1000],
             "team_player_id": info.get("team_player_id")
         }
+    actions = []
+    for item in (data.get("actions") or [])[:200]:
+        if not isinstance(item, dict):
+            continue
+        action_type = str(item.get("type", "")).strip().lower()
+        if action_type not in ("pass", "shot", "dribble", "run", "press", "custom"):
+            continue
+        try:
+            actions.append({
+                "id": str(item.get("id", secrets.token_hex(4)))[:40],
+                "type": action_type,
+                "x1": float(item["x1"]), "y1": float(item["y1"]),
+                "x2": float(item["x2"]), "y2": float(item["y2"]),
+                "step": max(1, min(99, int(item.get("step", len(actions)+1)))),
+                "label": str(item.get("label", "")).strip()[:80]
+            })
+        except Exception:
+            continue
+
+    frames = []
+    for frame_index, frame in enumerate((data.get("frames") or [])[:100], start=1):
+        if not isinstance(frame, dict):
+            continue
+
+        frame_positions = {}
+        for pid, pos in (frame.get("positions") or {}).items():
+            if pid != "ball":
+                if not isinstance(pid, str) or len(pid) > 32:
+                    continue
+            if not isinstance(pos, dict):
+                continue
+            try:
+                frame_positions[pid] = {
+                    "x": float(pos["x"]),
+                    "y": float(pos["y"])
+                }
+            except Exception:
+                continue
+
+        frame_actions = []
+        for item in (frame.get("actions") or [])[:200]:
+            if not isinstance(item, dict):
+                continue
+            action_type = str(item.get("type", "")).strip().lower()
+            if action_type not in ("pass", "shot", "dribble", "run", "press", "custom"):
+                continue
+            try:
+                frame_actions.append({
+                    "id": str(item.get("id", secrets.token_hex(4)))[:40],
+                    "type": action_type,
+                    "x1": float(item["x1"]),
+                    "y1": float(item["y1"]),
+                    "x2": float(item["x2"]),
+                    "y2": float(item["y2"]),
+                    "step": max(1, min(99, int(item.get("step", len(frame_actions) + 1)))),
+                    "label": str(item.get("label", "")).strip()[:80]
+                })
+            except Exception:
+                continue
+
+        frames.append({
+            "id": str(frame.get("id", f"frame_{frame_index}"))[:40],
+            "name": str(frame.get("name", f"Frame {frame_index}")).strip()[:120] or f"Frame {frame_index}",
+            "duration_ms": max(500, min(15000, int(frame.get("duration_ms", 1800)))),
+            "positions": frame_positions,
+            "actions": frame_actions
+        })
+
     context = data.get("context") if isinstance(data.get("context"), dict) else {}
     safe_context = {
         "velocity_team": str(context.get("velocity_team", "A"))[:10],
@@ -205,6 +286,8 @@ def clean_board_state(data, current_version=0):
         "orientation": orientation,
         "positions": positions,
         "players": players,
+        "actions": actions,
+        "frames": frames,
         "context": safe_context
     }
 
@@ -432,6 +515,22 @@ class Handler(BaseHTTPRequestHandler):
                 "updated_at": row["updated_at"]
             })
 
+        if len(parts) == 4 and parts[:3] == ["api", "v2", "scenario-share"]:
+            token = parts[3]
+            with db() as c:
+                row = c.execute("""
+                    SELECT s.id,s.name,s.description,s.state_json,s.updated_at,b.name AS board_name
+                    FROM scenarios s JOIN boards b ON b.id=s.board_id
+                    WHERE s.share_token=?
+                """, (token,)).fetchone()
+            if not row:
+                return self.send_json(404, {"error": "Scenario not found"})
+            return self.send_json(200, {
+                "id": row["id"], "name": row["name"], "description": row["description"],
+                "board_name": row["board_name"], "state": json.loads(row["state_json"]),
+                "updated_at": row["updated_at"]
+            })
+
         u = self.require_user()
         if not u:
             return
@@ -470,6 +569,41 @@ class Handler(BaseHTTPRequestHandler):
                 "share_token": row["share_token"], "state": json.loads(row["state_json"]),
                 "updated_at": row["updated_at"]
             })
+
+        if len(parts) == 5 and parts[:3] == ["api", "v2", "boards"] and parts[4] == "scenarios":
+            board_id = int(parts[3])
+            with db() as c:
+                if not c.execute("SELECT id FROM boards WHERE id=? AND user_id=?", (board_id,u["id"])).fetchone():
+                    return self.send_json(404,{"error":"Board not found"})
+                rows=c.execute("SELECT id,name,description,share_token,created_at,updated_at FROM scenarios WHERE board_id=? AND user_id=? ORDER BY updated_at DESC",(board_id,u["id"])).fetchall()
+            return self.send_json(200,{"scenarios":[dict(r) for r in rows]})
+
+        if len(parts) == 4 and parts[:3] == ["api", "v2", "scenarios"]:
+            sid=int(parts[3])
+            with db() as c:
+                row=c.execute("SELECT id,board_id,name,description,share_token,state_json,created_at,updated_at FROM scenarios WHERE id=? AND user_id=?",(sid,u["id"])).fetchone()
+            if not row:return self.send_json(404,{"error":"Scenario not found"})
+            return self.send_json(200,{"id":row["id"],"board_id":row["board_id"],"name":row["name"],"description":row["description"],"share_token":row["share_token"],"state":json.loads(row["state_json"]),"created_at":row["created_at"],"updated_at":row["updated_at"]})
+
+        if len(parts) == 4 and parts[:3] == ["api", "v2", "scenarios"]:
+            sid=int(parts[3])
+            try:
+                d=read_json_body(self)
+                with db() as c:
+                    row=c.execute("SELECT state_json FROM scenarios WHERE id=? AND user_id=?",(sid,u["id"])).fetchone()
+                    if not row:return self.send_json(404,{"error":"Scenario not found"})
+                    fields=[]; vals=[]
+                    if "name" in d:
+                        n=str(d["name"]).strip()[:120]
+                        if not n:raise ValueError("Scenario name required")
+                        fields.append("name=?");vals.append(n)
+                    if "description" in d:fields.append("description=?");vals.append(str(d["description"]).strip()[:1000])
+                    if isinstance(d.get("state"),dict):
+                        old=json.loads(row["state_json"]); new=clean_board_state(d["state"],old.get("version",0));fields.append("state_json=?");vals.append(json.dumps(new,separators=(",",":")))
+                    fields.append("updated_at=?");vals.append(now());vals.extend([sid,u["id"]])
+                    c.execute("UPDATE scenarios SET "+",".join(fields)+" WHERE id=? AND user_id=?",tuple(vals))
+                return self.send_json(200,{"ok":True})
+            except Exception as e:return self.send_json(400,{"error":str(e)})
 
         if parts == ["api", "v2", "settings", "llm"]:
             with db() as c:
@@ -603,6 +737,20 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 return self.send_json(400, {"error": str(e)})
 
+        if len(parts) == 5 and parts[:3] == ["api", "v2", "boards"] and parts[4] == "scenarios":
+            board_id=int(parts[3])
+            try:
+                d=read_json_body(self); name=str(d.get("name","")).strip()[:120]; desc=str(d.get("description","")).strip()[:1000]
+                if not name: raise ValueError("Scenario name required")
+                with db() as c:
+                    b=c.execute("SELECT state_json FROM boards WHERE id=? AND user_id=?",(board_id,u["id"])).fetchone()
+                    if not b:return self.send_json(404,{"error":"Board not found"})
+                    current=json.loads(b["state_json"]); snapshot=clean_board_state(d.get("state") if isinstance(d.get("state"),dict) else current,current.get("version",0))
+                    token=secrets.token_urlsafe(12)
+                    cur=c.execute("INSERT INTO scenarios(user_id,board_id,name,description,share_token,state_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",(u["id"],board_id,name,desc,token,json.dumps(snapshot,separators=(",",":")),now(),now()))
+                return self.send_json(201,{"ok":True,"id":cur.lastrowid,"share_token":token})
+            except Exception as e:return self.send_json(400,{"error":str(e)})
+
         if len(parts) == 5 and parts[:3] == ["api", "v2", "boards"] and parts[4] == "analyse":
             board_id = int(parts[3])
             try:
@@ -684,6 +832,11 @@ class Handler(BaseHTTPRequestHandler):
                 c.execute("""DELETE FROM players WHERE id=? AND team_id IN
                              (SELECT id FROM teams WHERE user_id=?)""", (pid,u["id"]))
             return self.send_json(200, {"ok": True})
+
+        if len(parts) == 4 and parts[:3] == ["api","v2","scenarios"]:
+            sid=int(parts[3])
+            with db() as c:c.execute("DELETE FROM scenarios WHERE id=? AND user_id=?",(sid,u["id"]))
+            return self.send_json(200,{"ok":True})
 
         if len(parts) == 4 and parts[:3] == ["api","v2","boards"]:
             bid = int(parts[3])
