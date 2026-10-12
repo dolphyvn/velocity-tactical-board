@@ -63,7 +63,7 @@ button,.btn{background:#1d4ed8;color:white;border:0;border-radius:7px;padding:9p
    <h2>AI settings</h2>
    <p class="muted small">The API key is encrypted server-side using VLFC_V2_MASTER_KEY. Leaving API key blank keeps the currently saved key.</p>
    <div class="row"><select id="provider"><option value="anthropic">Anthropic / Claude-compatible</option><option value="openai">OpenAI Responses-compatible</option></select><select id="authMode"><option value="x-api-key">x-api-key</option><option value="bearer">Bearer</option><option value="both">Both</option></select></div>
-   <div class="row"><input id="baseUrl" value="https://router.llm.astrona.me/v1" placeholder="Base URL"><input id="model" placeholder="Model name"></div>
+   <div class="row"><input id="baseUrl" value="https://api.anthropic.com/v1" placeholder="Base URL"><input id="model" placeholder="Model name"></div>
    <div class="row"><input id="apiKey" type="password" placeholder="API key"><button id="saveLlmBtn">Save AI settings</button></div>
    <div id="llmMsg" class="muted small"></div>
  </section>
@@ -75,10 +75,12 @@ const $=id=>document.getElementById(id);
 async function api(path,opt={}){const r=await fetch(path,{credentials:"same-origin",...opt,headers:{...H,...(opt.headers||{})}});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||("HTTP "+r.status));return d}
 function showLogin(){authView.classList.remove("hidden");appView.classList.add("hidden")}
 function showApp(u){authView.classList.add("hidden");appView.classList.remove("hidden");welcome.textContent=`Signed in as ${u.coach_name} (${u.email})`;refresh()}
+// Only same-origin relative URLs may be used as post-login targets (blocks open redirects and javascript: URLs).
+function safeNext(raw){try{const u=new URL(raw||"/v2.html",location.origin);return u.origin===location.origin?u.pathname+u.search+u.hash:"/v2.html"}catch(e){return "/v2.html"}}
 loginTab.onclick=()=>{loginForm.classList.remove("hidden");signupForm.classList.add("hidden");loginTab.classList.remove("secondary");signupTab.classList.add("secondary")}
 signupTab.onclick=()=>{signupForm.classList.remove("hidden");loginForm.classList.add("hidden");signupTab.classList.remove("secondary");loginTab.classList.add("secondary")}
-loginBtn.onclick=async()=>{try{await api("/api/v2/auth/login",{method:"POST",body:JSON.stringify({email:loginEmail.value,password:loginPassword.value})});const next=new URLSearchParams(location.search).get("next");location.href=next||"/v2.html"}catch(e){authMsg.textContent=e.message}}
-signupBtn.onclick=async()=>{try{await api("/api/v2/auth/signup",{method:"POST",body:JSON.stringify({coach_name:signupName.value,email:signupEmail.value,password:signupPassword.value})});const next=new URLSearchParams(location.search).get("next");location.href=next||"/v2.html"}catch(e){authMsg.textContent=e.message}}
+loginBtn.onclick=async()=>{try{await api("/api/v2/auth/login",{method:"POST",body:JSON.stringify({email:loginEmail.value,password:loginPassword.value})});location.href=safeNext(new URLSearchParams(location.search).get("next"))}catch(e){authMsg.textContent=e.message}}
+signupBtn.onclick=async()=>{try{await api("/api/v2/auth/signup",{method:"POST",body:JSON.stringify({coach_name:signupName.value,email:signupEmail.value,password:signupPassword.value})});location.href=safeNext(new URLSearchParams(location.search).get("next"))}catch(e){authMsg.textContent=e.message}}
 logoutBtn.onclick=async()=>{await api("/api/v2/auth/logout",{method:"POST",body:"{}"});location.reload()}
 let teams=[];
 async function refresh(){

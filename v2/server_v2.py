@@ -2,9 +2,11 @@
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import secrets
+import socket
 import sqlite3
 import threading
 import time
@@ -85,7 +87,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS llm_settings(
           user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
           provider TEXT NOT NULL DEFAULT 'anthropic',
-          base_url TEXT NOT NULL DEFAULT 'https://router.llm.astrona.me/v1',
+          base_url TEXT NOT NULL DEFAULT 'https://api.anthropic.com/v1',
           model TEXT NOT NULL DEFAULT '',
           auth_mode TEXT NOT NULL DEFAULT 'x-api-key',
           api_key_enc TEXT NOT NULL DEFAULT '',
@@ -331,6 +333,34 @@ def router_parse(raw_text):
             return value
     return candidates[-1]
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    # urllib would re-send the API key headers to whatever host a redirect points at.
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+_LLM_OPENER = urllib.request.build_opener(_NoRedirect)
+
+ALLOWED_LLM_HOSTS = {h.strip().lower() for h in os.environ.get("VLFC_V2_ALLOWED_LLM_HOSTS", "").split(",") if h.strip()}
+
+def validate_base_url(url):
+    # Public https endpoints are allowed (custom models included). Hosts that resolve to
+    # private, loopback, link-local or otherwise non-global addresses are refused, unless
+    # the operator listed them in VLFC_V2_ALLOWED_LLM_HOSTS.
+    parts = urlparse(url)
+    host = (parts.hostname or "").lower()
+    if parts.scheme != "https" or not host:
+        raise ValueError("LLM base URL must be an https:// URL")
+    if host in ALLOWED_LLM_HOSTS:
+        return url
+    try:
+        infos = socket.getaddrinfo(host, parts.port or 443, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        raise ValueError("LLM base URL host could not be resolved")
+    for info in infos:
+        if not ipaddress.ip_address(info[4][0].split("%")[0]).is_global:
+            raise ValueError("LLM base URL must not point to a private or internal address")
+    return url
+
 def request_json(url, body, headers):
     req = urllib.request.Request(
         url,
@@ -339,13 +369,16 @@ def request_json(url, body, headers):
         method="POST"
     )
     try:
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with _LLM_OPENER.open(req, timeout=60) as r:
             return router_parse(r.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as e:
+        # Upstream detail stays in the server log; the browser gets only the status code.
         detail = e.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"LLM API error {e.code}: {detail[:1200]}")
-    except urllib.error.URLError as e:
-        raise RuntimeError(f"LLM connection error: {e.reason}")
+        print(f"LLM API error {e.code}: {detail[:1200]}")
+        raise RuntimeError(f"LLM API returned HTTP {e.code}")
+    except urllib.error.URLError:
+        print("LLM connection failed")
+        raise RuntimeError("LLM connection failed")
 
 def parse_model_json(text):
     text = (text or "").strip()
@@ -391,7 +424,7 @@ def analyse_with_settings(settings, state):
     if not api_key:
         raise RuntimeError("No LLM API key saved for this coach")
     provider = settings["provider"].lower()
-    base_url = settings["base_url"].rstrip("/")
+    base_url = validate_base_url(settings["base_url"].rstrip("/"))
     model = settings["model"]
     auth_mode = settings["auth_mode"].lower()
     headers = {"Content-Type": "application/json"}
@@ -611,7 +644,7 @@ class Handler(BaseHTTPRequestHandler):
             if not row:
                 return self.send_json(200, {
                     "provider": "anthropic",
-                    "base_url": "https://router.llm.astrona.me/v1",
+                    "base_url": "https://api.anthropic.com/v1",
                     "model": "",
                     "auth_mode": "x-api-key",
                     "has_api_key": False
@@ -801,9 +834,13 @@ class Handler(BaseHTTPRequestHandler):
                 auth_mode = str(d.get("auth_mode","x-api-key")).strip().lower()
                 if provider not in ("anthropic","openai") or not base_url or not model or auth_mode not in ("x-api-key","bearer","both"):
                     raise ValueError("Invalid LLM settings")
+                validate_base_url(base_url)
                 with db() as c:
-                    old = c.execute("SELECT api_key_enc FROM llm_settings WHERE user_id=?", (u["id"],)).fetchone()
+                    old = c.execute("SELECT api_key_enc, base_url FROM llm_settings WHERE user_id=?", (u["id"],)).fetchone()
                     enc = old["api_key_enc"] if old else ""
+                    # A saved key is only ever sent to the endpoint it was saved for.
+                    if old and old["base_url"] != base_url and not d.get("api_key"):
+                        enc = ""
                     if d.get("api_key"):
                         enc = encrypt_secret(str(d["api_key"]).strip())
                     c.execute("""INSERT INTO llm_settings(user_id,provider,base_url,model,auth_mode,api_key_enc,updated_at)
