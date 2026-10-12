@@ -47,7 +47,13 @@ button,input{font:inherit}button{background:var(--card);color:white;border:1px s
 </div>
 <div class="main">
  <aside class="side"><h3>Squad</h3><div id="squad"></div><hr><div class="source red" data-team="A">+ Temporary red</div><div class="source blue" data-team="B">+ Temporary blue</div></aside>
- <section><div class="pitch"><svg id="board" viewBox="0 0 1200 700"><defs><marker id="arrowPass" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#ffffff"></path></marker><marker id="arrowShot" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#ef4444"></path></marker><marker id="arrowRun" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#facc15"></path></marker><marker id="arrowPress" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#fb923c"></path></marker></defs><g id="pitchLayer"></g><g id="actionsLayer"></g><g id="ghostLayer"></g><g id="piecesLayer"></g></svg></div>
+ <section><div class="pitch"><svg id="board" viewBox="0 0 1200 700"><defs>
+<pattern id="grassH" patternUnits="userSpaceOnUse" width="100" height="100"><rect width="100" height="100" fill="#3f7d45"/><rect width="50" height="100" fill="#458a4c"/></pattern>
+<pattern id="grassV" patternUnits="userSpaceOnUse" width="100" height="100"><rect width="100" height="100" fill="#3f7d45"/><rect width="100" height="50" fill="#458a4c"/></pattern>
+<radialGradient id="shirtA" cx="40%" cy="30%" r="75%"><stop offset="0" stop-color="#f87171"/><stop offset="1" stop-color="#991b1b"/></radialGradient>
+<radialGradient id="shirtB" cx="40%" cy="30%" r="75%"><stop offset="0" stop-color="#60a5fa"/><stop offset="1" stop-color="#1e3a8a"/></radialGradient>
+<filter id="shadow" x="-40%" y="-40%" width="180%" height="180%"><feDropShadow dx="0" dy="3" stdDeviation="2.5" flood-color="#000" flood-opacity=".4"/></filter>
+<marker id="arrowPass" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#ffffff"></path></marker><marker id="arrowShot" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#ef4444"></path></marker><marker id="arrowRun" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#facc15"></path></marker><marker id="arrowPress" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#fb923c"></path></marker></defs><g id="pitchLayer"></g><g id="actionsLayer"></g><g id="ghostLayer"></g><g id="piecesLayer"></g></svg></div>
  <div id="editor" class="editor hidden"><input id="name" placeholder="Name"><input id="role" placeholder="Role"><input id="specs" placeholder="Specs / notes"><button id="save">Update</button><button id="del">Delete</button></div></section>
  <aside class="ai"><h3>AI Tactical Coach</h3><div id="aiResult" class="muted">Arrange the board, then analyse.</div><div class="scenarios"><h3>Saved scenarios</h3><input id="scenarioName" placeholder="e.g. Attack left → finish"><input id="scenarioDescription" placeholder="Short explanation / coaching objective"><button id="saveScenarioBtn">Save current scenario</button><div id="scenarioList" class="muted">No scenarios yet.</div></div></aside>
 </div></main>
@@ -65,7 +71,7 @@ function draw(){
   svg.setAttribute("viewBox","0 0 1200 700");
 
   pitch.append(
-   S("rect",{x:10,y:10,width:1180,height:680,rx:18,fill:"#4b7f52"}),
+   S("rect",{x:10,y:10,width:1180,height:680,rx:18,fill:"url(#grassH)"}),
 
    S("rect",{x:25,y:25,width:1150,height:650,fill:"none",stroke:"white","stroke-width":4}),
 
@@ -92,7 +98,7 @@ function draw(){
   svg.setAttribute("viewBox","0 0 700 1000");
 
   pitch.append(
-   S("rect",{x:10,y:10,width:680,height:980,rx:18,fill:"#4b7f52"}),
+   S("rect",{x:10,y:10,width:680,height:980,rx:18,fill:"url(#grassV)"}),
 
    S("rect",{x:25,y:25,width:650,height:950,fill:"none",stroke:"white","stroke-width":4}),
 
@@ -116,10 +122,13 @@ function draw(){
   );
  }
 }
-function createBall(){const g=S("g");g.dataset.id="ball";g.append(S("circle",{r:22,fill:"#ff7a00",stroke:"#7c2d12","stroke-width":4}),S("circle",{r:6,fill:"white"}));pieces.append(g);ball.el=g;update(ball)}
+const SHIRT_PATH="M-12,-30 L-30,-24 L-38,-6 L-28,-2 L-26,28 L26,28 L28,-2 L38,-6 L30,-24 L12,-30 Q0,-20 -12,-30 Z";
+function polyPoints(cx,cy,r,rot){return Array.from({length:5},(_,i)=>{const a=(rot+72*i)*Math.PI/180;return (cx+r*Math.cos(a)).toFixed(2)+","+(cy+r*Math.sin(a)).toFixed(2)}).join(" ")}
+function ballPattern(){const parts=[S("polygon",{points:polyPoints(0,0,8,-90),fill:"#111827"})];for(let i=0;i<5;i++){const a=(-54+72*i)*Math.PI/180;parts.push(S("polygon",{points:polyPoints(16*Math.cos(a),16*Math.sin(a),5,-54+72*i),fill:"#111827"}))}return parts}
+function createBall(){const g=S("g");g.dataset.id="ball";g.append(S("circle",{r:22,fill:"transparent"}));const body=S("g",{filter:"url(#shadow)"});body.append(S("circle",{r:22,fill:"white",stroke:"#111827","stroke-width":2}),...ballPattern());g.append(body);pieces.append(g);ball.el=g;update(ball)}
 function nextId(team){let i=1;while(ps.has(team+i))i++;return team+i}
-function createPlayer(team,id,data={}){id=id||nextId(team);if(ps.has(id))return ps.get(id);const g=S("g");g.dataset.id=id;g.append(S("circle",{r:36,fill:team==="A"?"#dc2626":"#2563eb",stroke:"white","stroke-width":4}));const t=S("text",{"text-anchor":"middle",fill:"white","font-size":12,"font-weight":800,"pointer-events":"none"});g.append(t);pieces.append(g);const p={id,team,type:"player",x:data.x||600,y:data.y||350,name:data.name||id,role:data.role||"",specs:data.specs||"",team_player_id:data.team_player_id||null,el:g,text:t};ps.set(id,p);label(p);update(p);return p}
-function label(p){p.text.textContent=p.name||p.id;p.text.setAttribute("y","4")}
+function createPlayer(team,id,data={}){id=id||nextId(team);if(ps.has(id))return ps.get(id);const g=S("g");g.dataset.id=id;g.append(S("circle",{r:36,fill:"transparent"}));const shirt=S("g",{filter:"url(#shadow)"});shirt.append(S("path",{d:SHIRT_PATH,fill:team==="A"?"url(#shirtA)":"url(#shirtB)",stroke:"white","stroke-width":3,"stroke-linejoin":"round"}));g.append(shirt);const t=S("text",{"text-anchor":"middle",fill:"white","font-size":17,"font-weight":800,"pointer-events":"none",stroke:"#0f172a","stroke-width":4,"paint-order":"stroke"});g.append(t);pieces.append(g);const p={id,team,type:"player",x:data.x||600,y:data.y||350,name:data.name||id,role:data.role||"",specs:data.specs||"",team_player_id:data.team_player_id||null,el:g,text:t};ps.set(id,p);label(p);update(p);return p}
+function label(p){p.text.textContent=p.name||p.id;p.text.setAttribute("y","50")}
 function update(p){p.el.setAttribute("transform",`translate(${p.x} ${p.y})`)}
 function point(cx,cy){const p=svg.createSVGPoint();p.x=cx;p.y=cy;const z=p.matrixTransform(svg.getScreenCTM().inverse());return{x:z.x,y:z.y}}
 function clamp(p,x,y){const r=p.type==="ball"?22:36;if(orientation==="horizontal")return{x:Math.max(25+r,Math.min(1175-r,x)),y:Math.max(25+r,Math.min(675-r,y))};return{x:Math.max(25+r,Math.min(675-r,x)),y:Math.max(25+r,Math.min(975-r,y))}}
