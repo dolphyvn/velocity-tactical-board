@@ -67,6 +67,6 @@ Verify backend changes with the unit tests, and by running the server and callin
 
 - **Scenario update is unreachable.** `v2-board.html` `overwriteScenario()` sends `PUT /api/v2/scenarios/{id}`. The update branch sits inside `do_GET` (around line 621), and the GET branch at line 614 matches first. `do_PUT` has no scenario route, so the PUT returns 404. Fix by moving the handler into `do_PUT`.
 - **`v2-board.html` links to `/v2.html`**, which exists only under `v2/`. Links break if the repo root is served as-is.
-- **No `.gitignore` yet.** The SQLite database (coach emails, password hashes, encrypted LLM keys) must never be committed, and `v2/__pycache__/` is untracked. Add a `.gitignore` covering `*.sqlite3*`, `__pycache__/` and `*-state.json` before any `git add -A`.
+- **The SQLite database must never be committed.** It holds coach emails, password hashes and encrypted LLM keys. `.gitignore` covers `*.sqlite3*`, `__pycache__/`, `*-state.json` and `.env`. Keep it that way if you add new data or secret files.
 - **The SQLite database has been removed from history**, along with the legacy v1 files (`server.py`, `server_anthropic.py`, `board.html`, `friday.html`, `board-backup.html`, `index-backup.html`) and the `*-state.json` files. Do not reintroduce them.
 - **Lost-update race:** `PUT .../state` reads and writes without a transaction and has no version check, so two overlapping saves can silently drop one.
